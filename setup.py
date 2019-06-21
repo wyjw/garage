@@ -47,7 +47,6 @@ extras['dev'] = [
     'flake8',
     'flake8-docstrings==1.3.0',
     'flake8-import-order',
-    'nose2',
     'pandas',
     'pep8-naming==0.7.0',
     'pre-commit',
