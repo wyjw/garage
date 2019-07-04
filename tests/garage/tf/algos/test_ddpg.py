@@ -11,9 +11,11 @@ from garage.experiment import LocalRunner
 from garage.np.exploration_strategies import OUStrategy
 from garage.replay_buffer import SimpleReplayBuffer
 from garage.tf.algos import DDPG
+from garage.tf.algos import DDPGWithModel
 from garage.tf.envs import TfEnv
 from garage.tf.policies import ContinuousMLPPolicyWithModel
 from garage.tf.q_functions import ContinuousMLPQFunction
+from garage.tf.q_functions import ContinuousMLPQFunctionWithModel
 from tests.fixtures import TfGraphTestCase
 
 
@@ -72,7 +74,7 @@ class TestDDPG(TfGraphTestCase):
                 hidden_sizes=[64, 64],
                 hidden_nonlinearity=tf.nn.relu,
                 output_nonlinearity=tf.nn.tanh)
-            qf = ContinuousMLPQFunction(
+            qf = ContinuousMLPQFunctionWithModel(
                 env_spec=env.spec,
                 hidden_sizes=[64, 64],
                 hidden_nonlinearity=tf.nn.relu)
@@ -80,7 +82,7 @@ class TestDDPG(TfGraphTestCase):
                 env_spec=env.spec,
                 size_in_transitions=int(1e6),
                 time_horizon=100)
-            algo = DDPG(
+            algo = DDPGWithModel(
                 env_spec=env.spec,
                 policy=policy,
                 policy_lr=1e-4,
@@ -96,6 +98,6 @@ class TestDDPG(TfGraphTestCase):
             runner.setup(algo, env)
             last_avg_ret = runner.train(
                 n_epochs=10, n_epoch_cycles=20, batch_size=100)
-            assert last_avg_ret > 10
+            assert last_avg_ret > 60
 
             env.close()

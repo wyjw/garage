@@ -33,9 +33,11 @@ from garage.experiment import LocalRunner
 from garage.np.exploration_strategies import OUStrategy
 from garage.replay_buffer import SimpleReplayBuffer
 from garage.tf.algos import DDPG
+from garage.tf.algos import DDPGWithModel
 from garage.tf.envs import TfEnv
-from garage.tf.policies import ContinuousMLPPolicyWithModel
+from garage.tf.policies import ContinuousMLPPolicy
 from garage.tf.q_functions import ContinuousMLPQFunction
+from garage.tf.q_functions import ContinuousMLPQFunctionWithModel
 import tests.helpers as Rh
 from tests.wrappers import AutoStopEnv
 
@@ -45,7 +47,7 @@ params = {
     'qf_lr': 1e-3,
     'policy_hidden_sizes': [64, 64],
     'qf_hidden_sizes': [64, 64],
-    'n_epochs': 500,
+    'n_epochs': 10,
     'n_epoch_cycles': 20,
     'n_rollout_steps': 100,
     'n_train_steps': 50,
@@ -83,39 +85,39 @@ class TestBenchmarkDDPG:
             task_dir = osp.join(benchmark_dir, env_id)
             plt_file = osp.join(benchmark_dir,
                                 '{}_benchmark.png'.format(env_id))
-            baselines_csvs = []
+            garage_models_csvs = []
             garage_csvs = []
 
             for trial in range(task['trials']):
-                env.reset()
                 baseline_env.reset()
                 seed = seeds[trial]
 
                 trial_dir = osp.join(
                     task_dir, 'trial_{}_seed_{}'.format(trial + 1, seed))
                 garage_dir = osp.join(trial_dir, 'garage')
-                baselines_dir = osp.join(trial_dir, 'baselines')
+                garage_models_dir = osp.join(trial_dir, 'garage_models')
 
                 with tf.Graph().as_default():
                     # Run garage algorithms
+                    env.reset()
                     garage_csv = run_garage(env, seed, garage_dir)
-
+                    env.reset()
                     # Run baselines algorithms
-                    baselines_csv = run_baselines(baseline_env, seed,
-                                                  baselines_dir)
+                    garage_model_csv = run_garage_model(
+                        env, seed, garage_models_dir)
 
                 garage_csvs.append(garage_csv)
-                baselines_csvs.append(baselines_csv)
+                garage_models_csvs.append(garage_model_csv)
 
             env.close()
 
             Rh.plot(
-                b_csvs=baselines_csvs,
+                b_csvs=garage_models_csvs,
                 g_csvs=garage_csvs,
                 g_x='Epoch',
                 g_y='AverageReturn',
-                b_x='total/epochs',
-                b_y='rollout/return',
+                b_x='Epoch',
+                b_y='AverageReturn',
                 trials=task['trials'],
                 seeds=seeds,
                 plt_file=plt_file,
@@ -124,14 +126,14 @@ class TestBenchmarkDDPG:
                 y_label='AverageReturn')
 
             result_json[env_id] = Rh.create_json(
-                b_csvs=baselines_csvs,
+                b_csvs=garage_models_csvs,
                 g_csvs=garage_csvs,
                 seeds=seeds,
                 trails=task['trials'],
                 g_x='Epoch',
                 g_y='AverageReturn',
-                b_x='total/epochs',
-                b_y='rollout/return',
+                b_x='Epoch',
+                b_y='AverageReturn',
                 factor_g=params['n_epoch_cycles'] * params['n_rollout_steps'],
                 factor_b=1)
 
@@ -154,7 +156,7 @@ def run_garage(env, seed, log_dir):
         # Set up params for ddpg
         action_noise = OUStrategy(env.spec, sigma=params['sigma'])
 
-        policy = ContinuousMLPPolicyWithModel(
+        policy = ContinuousMLPPolicy(
             env_spec=env.spec,
             hidden_sizes=params['policy_hidden_sizes'],
             hidden_nonlinearity=tf.nn.relu,
@@ -184,6 +186,75 @@ def run_garage(env, seed, log_dir):
             exploration_strategy=action_noise,
             policy_optimizer=tf.train.AdamOptimizer,
             qf_optimizer=tf.train.AdamOptimizer)
+
+        # Set up logger since we are not using run_experiment
+        tabular_log_file = osp.join(log_dir, 'progress.csv')
+        tensorboard_log_dir = osp.join(log_dir)
+        dowel_logger.add_output(dowel.StdOutput())
+        dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
+        dowel_logger.add_output(dowel.TensorBoardOutput(tensorboard_log_dir))
+
+        runner.setup(ddpg, env)
+        runner.train(
+            n_epochs=params['n_epochs'],
+            n_epoch_cycles=params['n_epoch_cycles'],
+            batch_size=params['n_rollout_steps'])
+
+        dowel_logger.remove_all()
+
+        return tabular_log_file
+
+
+def run_garage_model(env, seed, log_dir):
+    '''
+    Create garage model and training.
+
+    Replace the ddpg with the algorithm you want to run.
+
+    :param env: Environment of the task.
+    :param seed: Random seed for the trial.
+    :param log_dir: Log dir path.
+    :return:
+    '''
+    deterministic.set_seed(seed)
+
+    with LocalRunner() as runner:
+        env = TfEnv(env)
+        # Set up params for ddpg
+        action_noise = OUStrategy(env.spec, sigma=params['sigma'])
+
+        policy = ContinuousMLPPolicy(
+            env_spec=env.spec,
+            hidden_sizes=params['policy_hidden_sizes'],
+            hidden_nonlinearity=tf.nn.relu,
+            output_nonlinearity=tf.nn.tanh,
+            name='BenchmarkPolicy')
+
+        qf = ContinuousMLPQFunctionWithModel(
+            env_spec=env.spec,
+            hidden_sizes=params['qf_hidden_sizes'],
+            hidden_nonlinearity=tf.nn.relu)
+
+        replay_buffer = SimpleReplayBuffer(
+            env_spec=env.spec,
+            size_in_transitions=params['replay_buffer_size'],
+            time_horizon=params['n_rollout_steps'])
+
+        ddpg = DDPGWithModel(
+            env_spec=env.spec,
+            policy=policy,
+            qf=qf,
+            replay_buffer=replay_buffer,
+            policy_lr=params['policy_lr'],
+            qf_lr=params['qf_lr'],
+            target_update_tau=params['tau'],
+            n_train_steps=params['n_train_steps'],
+            discount=params['discount'],
+            min_buffer_size=int(1e4),
+            exploration_strategy=action_noise,
+            policy_optimizer=tf.train.AdamOptimizer,
+            qf_optimizer=tf.train.AdamOptimizer,
+            name='DDPGModel')
 
         # Set up logger since we are not using run_experiment
         tabular_log_file = osp.join(log_dir, 'progress.csv')

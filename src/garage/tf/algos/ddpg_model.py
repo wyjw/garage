@@ -1,3 +1,4 @@
+"""DDPGWithModel."""
 from collections import deque
 
 from dowel import logger, tabular
@@ -10,7 +11,7 @@ from garage.tf.algos.off_policy_rl_algorithm import OffPolicyRLAlgorithm
 from garage.tf.misc import tensor_utils
 
 
-class DDPG(OffPolicyRLAlgorithm):
+class DDPGWithModel(OffPolicyRLAlgorithm):
     """A DDPG model based on https://arxiv.org/pdf/1509.02971.pdf.
 
     DDPG, also known as Deep Deterministic Policy Gradient, uses actor-critic
@@ -20,7 +21,7 @@ class DDPG(OffPolicyRLAlgorithm):
     networks involved to stabilize the training process.
 
     Example:
-        $ python garage/examples/tf/ddpg_pendulum.py
+        $ python garage/examples/tf/DDPGWithModel_pendulum.py
 
     Args:
         env_spec (EnvSpec): Environment specification.
@@ -83,7 +84,7 @@ class DDPG(OffPolicyRLAlgorithm):
                  reward_scale=1.,
                  input_include_goal=False,
                  smooth_return=True,
-                 name='DDPG'):
+                 name='DDPGWithModel'):
         action_bound = env_spec.action_space.high
         self.max_action = action_bound if max_action is None else max_action
         self.tau = target_update_tau
@@ -103,8 +104,9 @@ class DDPG(OffPolicyRLAlgorithm):
         self.episode_qf_losses = []
         self.epoch_ys = []
         self.epoch_qs = []
+        self.target_qf = qf.clone('target_qf_benchmark')
 
-        super(DDPG, self).__init__(
+        super(DDPGWithModel, self).__init__(
             env_spec=env_spec,
             policy=policy,
             qf=qf,
@@ -124,22 +126,23 @@ class DDPG(OffPolicyRLAlgorithm):
 
     @overrides
     def init_opt(self):
-        with tf.name_scope(self.name, 'DDPG'):
+        """init_opt."""
+        with tf.name_scope(self.name, 'DDPGWithModel'):
             # Create target policy and qf network
             self.target_policy_f_prob_online, _, _ = self.policy.build_net(
-                trainable=False, name='target_policy')
-            self.target_qf_f_prob_online, _, _, _ = self.qf.build_net(
-                trainable=False, name='target_qf')
+                trainable=False, name='target_policy_benchmark')
+            self.target_qf_f_prob_online = self.target_qf.get_qval
 
             # Set up target init and update function
             with tf.name_scope('setup_target'):
                 ops = tensor_utils.get_target_ops(
                     self.policy.get_global_vars(),
-                    self.policy.get_global_vars('target_policy'), self.tau)
+                    self.policy.get_global_vars('target_policy_benchmark'),
+                    self.tau)
                 policy_init_ops, policy_update_ops = ops
                 qf_init_ops, qf_update_ops = tensor_utils.get_target_ops(
                     self.qf.get_global_vars(),
-                    self.qf.get_global_vars('target_qf'), self.tau)
+                    self.target_qf.get_global_vars(), self.tau)
                 target_init_op = policy_init_ops + qf_init_ops
                 target_update_op = policy_update_ops + qf_update_ops
 
@@ -163,6 +166,7 @@ class DDPG(OffPolicyRLAlgorithm):
                     tf.float32,
                     shape=(None, self.env_spec.action_space.flat_dim),
                     name='input_action')
+
             # Set up policy training function
             next_action = self.policy.get_action_sym(obs, name='policy_action')
             next_qval = self.qf.get_qval_sym(
@@ -208,6 +212,7 @@ class DDPG(OffPolicyRLAlgorithm):
             self.f_update_target = f_update_target
 
     def __getstate__(self):
+        """__getstate__."""
         data = self.__dict__.copy()
         del data['target_policy_f_prob_online']
         del data['target_qf_f_prob_online']
@@ -218,10 +223,12 @@ class DDPG(OffPolicyRLAlgorithm):
         return data
 
     def __setstate__(self, state):
+        """__setstate__."""
         self.__dict__ = state
         self.init_opt()
 
     def train_once(self, itr, paths):
+        """train_once."""
         paths = self.process_samples(itr, paths)
 
         epoch = itr / self.n_epoch_cycles
@@ -330,4 +337,5 @@ class DDPG(OffPolicyRLAlgorithm):
 
     @overrides
     def get_itr_snapshot(self, itr):
+        """get_tr_snapshot."""
         return dict(itr=itr, policy=self.policy)
