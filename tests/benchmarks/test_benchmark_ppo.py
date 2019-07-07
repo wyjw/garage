@@ -29,12 +29,12 @@ from garage.envs import normalize
 from garage.experiment import deterministic
 from garage.experiment import LocalRunner
 from garage.tf.algos import PPO
-from garage.tf.baselines import GaussianMLPBaseline
+from garage.tf.baselines import ContinuousMLPBaseline
+from garage.tf.baselines import ContinuousMLPBaselineWithModel
 from garage.tf.envs import TfEnv
 from garage.tf.optimizers import FirstOrderOptimizer
-from garage.tf.policies import GaussianMLPPolicy
+from garage.tf.policies import GaussianMLPPolicyWithModel
 import tests.helpers as Rh
-from tests.wrappers import AutoStopEnv
 
 
 class TestBenchmarkPPO:
@@ -55,14 +55,14 @@ class TestBenchmarkPPO:
             env_id = task['env_id']
 
             env = gym.make(env_id)
-            baseline_env = AutoStopEnv(env_name=env_id, max_path_length=100)
+            # baseline_env = AutoStopEnv(env_name=env_id, max_path_length=100)
 
             seeds = random.sample(range(100), task['trials'])
 
             task_dir = osp.join(benchmark_dir, env_id)
             plt_file = osp.join(benchmark_dir,
                                 '{}_benchmark.png'.format(env_id))
-            baselines_csvs = []
+            garage_models_csvs = []
             garage_csvs = []
 
             for trial in range(task['trials']):
@@ -70,30 +70,32 @@ class TestBenchmarkPPO:
 
                 trial_dir = task_dir + '/trial_%d_seed_%d' % (trial + 1, seed)
                 garage_dir = trial_dir + '/garage'
-                baselines_dir = trial_dir + '/baselines'
+                garage_models_dir = trial_dir + '/garage_models'
 
                 with tf.Graph().as_default():
                     # Run baselines algorithms
-                    baseline_env.reset()
-                    baselines_csv = run_baselines(baseline_env, seed,
-                                                  baselines_dir)
+                    # baseline_env.reset()
+                    # baselines_csv = run_baselines(baseline_env, seed,
+                    #                               baselines_dir)
 
                     # Run garage algorithms
                     env.reset()
                     garage_csv = run_garage(env, seed, garage_dir)
-
+                    env.reset()
+                    garage_models_csv = run_garage_with_models(
+                        env, seed, garage_models_dir)
                 garage_csvs.append(garage_csv)
-                baselines_csvs.append(baselines_csv)
+                garage_models_csvs.append(garage_models_csv)
 
             env.close()
 
             Rh.plot(
-                b_csvs=baselines_csvs,
+                b_csvs=garage_models_csvs,
                 g_csvs=garage_csvs,
                 g_x='Iteration',
                 g_y='AverageReturn',
-                b_x='nupdates',
-                b_y='eprewmean',
+                b_x='Iteration',
+                b_y='AverageReturn',
                 trials=task['trials'],
                 seeds=seeds,
                 plt_file=plt_file,
@@ -102,14 +104,14 @@ class TestBenchmarkPPO:
                 y_label='AverageReturn')
 
             result_json[env_id] = Rh.create_json(
-                b_csvs=baselines_csvs,
+                b_csvs=garage_models_csvs,
                 g_csvs=garage_csvs,
                 seeds=seeds,
                 trails=task['trials'],
                 g_x='Iteration',
                 g_y='AverageReturn',
-                b_x='nupdates',
-                b_y='eprewmean',
+                b_x='Iteration',
+                b_y='AverageReturn',
                 factor_g=2048,
                 factor_b=2048)
 
@@ -132,18 +134,17 @@ def run_garage(env, seed, log_dir):
     with LocalRunner() as runner:
         env = TfEnv(normalize(env))
 
-        policy = GaussianMLPPolicy(
+        policy = GaussianMLPPolicyWithModel(
             env_spec=env.spec,
-            hidden_sizes=(64, 64),
+            hidden_sizes=(32, 32),
             hidden_nonlinearity=tf.nn.tanh,
             output_nonlinearity=None,
         )
 
-        baseline = GaussianMLPBaseline(
+        baseline = ContinuousMLPBaseline(
             env_spec=env.spec,
             regressor_args=dict(
                 hidden_sizes=(64, 64),
-                use_trust_region=False,
                 optimizer=FirstOrderOptimizer,
                 optimizer_args=dict(
                     batch_size=32,
@@ -168,6 +169,73 @@ def run_garage(env, seed, log_dir):
                 tf_optimizer_args=dict(learning_rate=1e-3),
             ),
         )
+
+        # Set up logger since we are not using run_experiment
+        tabular_log_file = osp.join(log_dir, 'progress.csv')
+        dowel_logger.add_output(dowel.StdOutput())
+        dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
+        dowel_logger.add_output(dowel.TensorBoardOutput(log_dir))
+
+        runner.setup(algo, env)
+        runner.train(n_epochs=488, batch_size=2048)
+
+        dowel_logger.remove_all()
+
+        return tabular_log_file
+
+
+def run_garage_with_models(env, seed, log_dir):
+    '''
+    Create garage model and training.
+
+    Replace the ppo with the algorithm you want to run.
+
+    :param env: Environment of the task.
+    :param seed: Random seed for the trial.
+    :param log_dir: Log dir path.
+    :return:
+    '''
+    deterministic.set_seed(seed)
+
+    with LocalRunner() as runner:
+        env = TfEnv(normalize(env))
+
+        policy = GaussianMLPPolicyWithModel(
+            env_spec=env.spec,
+            name='GaussianMLPPolicyBenchmark',
+            hidden_sizes=(32, 32),
+            hidden_nonlinearity=tf.nn.tanh,
+            output_nonlinearity=None,
+        )
+
+        baseline = ContinuousMLPBaselineWithModel(
+            env_spec=env.spec,
+            regressor_args=dict(
+                hidden_sizes=(64, 64),
+                optimizer=FirstOrderOptimizer,
+                optimizer_args=dict(
+                    batch_size=32,
+                    max_epochs=10,
+                    tf_optimizer_args=dict(learning_rate=1e-3),
+                ),
+            ),
+            name='GaussianMLPBaselineWithModelBenchmark')
+
+        algo = PPO(
+            env_spec=env.spec,
+            policy=policy,
+            baseline=baseline,
+            max_path_length=100,
+            discount=0.99,
+            gae_lambda=0.95,
+            lr_clip_range=0.2,
+            policy_ent_coeff=0.0,
+            optimizer_args=dict(
+                batch_size=32,
+                max_epochs=10,
+                tf_optimizer_args=dict(learning_rate=1e-3),
+            ),
+            name='PPOBenchmark')
 
         # Set up logger since we are not using run_experiment
         tabular_log_file = osp.join(log_dir, 'progress.csv')
