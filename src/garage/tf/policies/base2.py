@@ -115,7 +115,7 @@ class Policy2:
         tag_tuple = tuple(sorted(list(tags.items()), key=lambda x: x[0]))
         if tag_tuple not in self._cached_param_shapes:
             params = self.get_params(**tags)
-            param_values = tf.get_default_session().run(params)
+            param_values = tf.compat.v1.get_default_session().run(params)
             self._cached_param_shapes[tag_tuple] = [
                 val.shape for val in param_values
             ]
@@ -123,7 +123,7 @@ class Policy2:
 
     def get_param_values(self, **tags):
         params = self.get_params(**tags)
-        param_values = tf.get_default_session().run(params)
+        param_values = tf.compat.v1.get_default_session().run(params)
         return flatten_tensors(param_values)
 
     def set_param_values(self, param_values, name=None, **tags):

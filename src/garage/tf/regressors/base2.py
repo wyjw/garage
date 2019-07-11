@@ -72,7 +72,7 @@ class Regressor2(abc.ABC):
         tag_tuple = tuple(sorted(list(tags.items()), key=lambda x: x[0]))
         if tag_tuple not in self._cached_param_shapes:
             params = self.get_params(**tags)
-            param_values = tf.get_default_session().run(params)
+            param_values = tf.compat.v1.get_default_session().run(params)
             self._cached_param_shapes[tag_tuple] = [
                 val.shape for val in param_values
             ]
@@ -81,7 +81,7 @@ class Regressor2(abc.ABC):
     def get_param_values(self, **tags):
         """Get the list of values for the parameters."""
         params = self.get_params(**tags)
-        param_values = tf.get_default_session().run(params)
+        param_values = tf.compat.v1.get_default_session().run(params)
         return flatten_tensors(param_values)
 
     def set_param_values(self, flattened_params, name=None, **tags):
