@@ -4,6 +4,7 @@ import pickle
 from dowel import logger, tabular
 import numpy as np
 
+from garage.experiment import deterministic
 from garage.misc import tensor_utils
 from garage.misc.overrides import overrides
 from garage.misc.prog_bar_counter import ProgBarCounter
@@ -21,6 +22,9 @@ class OnPolicyVectorizedSampler(BatchSampler):
     def start_worker(self):
         n_envs = self.n_envs
         envs = [pickle.loads(pickle.dumps(self.env)) for _ in range(n_envs)]
+        _ = [
+            e.seed(deterministic.get_seed() + i) for (i, e) in enumerate(envs)
+        ]
         self.vec_env = VecEnvExecutor(
             envs=envs, max_path_length=self.algo.max_path_length)
         self.env_spec = self.env.spec

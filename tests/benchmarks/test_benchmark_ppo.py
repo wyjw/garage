@@ -29,12 +29,15 @@ from garage.envs import normalize
 from garage.experiment import deterministic
 from garage.experiment import LocalRunner
 from garage.tf.algos import PPO
-from garage.tf.baselines import ContinuousMLPBaseline
-from garage.tf.baselines import ContinuousMLPBaselineWithModel
+from garage.tf.baselines import GaussianMLPBaseline
 from garage.tf.envs import TfEnv
 from garage.tf.optimizers import FirstOrderOptimizer
+from garage.tf.policies import GaussianMLPPolicy
 from garage.tf.policies import GaussianMLPPolicyWithModel
 import tests.helpers as Rh
+
+var1 = []
+var2 = []
 
 
 class TestBenchmarkPPO:
@@ -53,7 +56,8 @@ class TestBenchmarkPPO:
         result_json = {}
         for task in mujoco1m['tasks']:
             env_id = task['env_id']
-
+            if 'HalfCheetah' not in env_id:
+                continue
             env = gym.make(env_id)
             # baseline_env = AutoStopEnv(env_name=env_id, max_path_length=100)
 
@@ -66,7 +70,7 @@ class TestBenchmarkPPO:
             garage_csvs = []
 
             for trial in range(task['trials']):
-                seed = seeds[trial]
+                seed = 88
 
                 trial_dir = task_dir + '/trial_%d_seed_%d' % (trial + 1, seed)
                 garage_dir = trial_dir + '/garage'
@@ -80,8 +84,14 @@ class TestBenchmarkPPO:
 
                     # Run garage algorithms
                     env.reset()
+                    env.seed(1)
+                    x = env.reset()
+                    print(x)
                     garage_csv = run_garage(env, seed, garage_dir)
                     env.reset()
+                    env.seed(1)
+                    x = env.reset()
+                    print(x)
                     garage_models_csv = run_garage_with_models(
                         env, seed, garage_models_dir)
                 garage_csvs.append(garage_csv)
@@ -129,22 +139,29 @@ def run_garage(env, seed, log_dir):
     :param log_dir: Log dir path.
     :return:
     '''
+    global var1
+    var1 = []
     deterministic.set_seed(seed)
-
-    with LocalRunner() as runner:
+    config = tf.ConfigProto(
+        allow_soft_placement=True,
+        intra_op_parallelism_threads=12,
+        inter_op_parallelism_threads=12)
+    sess = tf.Session(config=config)
+    with LocalRunner(sess=sess, max_cpus=12) as runner:
         env = TfEnv(normalize(env))
 
-        policy = GaussianMLPPolicyWithModel(
+        policy = GaussianMLPPolicy(
             env_spec=env.spec,
             hidden_sizes=(32, 32),
             hidden_nonlinearity=tf.nn.tanh,
             output_nonlinearity=None,
         )
 
-        baseline = ContinuousMLPBaseline(
+        baseline = GaussianMLPBaseline(
             env_spec=env.spec,
             regressor_args=dict(
                 hidden_sizes=(64, 64),
+                use_trust_region=False,
                 optimizer=FirstOrderOptimizer,
                 optimizer_args=dict(
                     batch_size=32,
@@ -176,9 +193,11 @@ def run_garage(env, seed, log_dir):
         dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
         dowel_logger.add_output(dowel.TensorBoardOutput(log_dir))
 
-        runner.setup(algo, env)
-        runner.train(n_epochs=488, batch_size=2048)
-
+        runner.setup(algo, env, sampler_args=dict(n_envs=12))
+        r1 = policy.get_params()
+        # Save weights
+        var1.extend([i.eval() for i in r1])
+        runner.train(n_epochs=3, batch_size=2048)
         dowel_logger.remove_all()
 
         return tabular_log_file
@@ -195,9 +214,14 @@ def run_garage_with_models(env, seed, log_dir):
     :param log_dir: Log dir path.
     :return:
     '''
+    global var2
     deterministic.set_seed(seed)
-
-    with LocalRunner() as runner:
+    config = tf.ConfigProto(
+        allow_soft_placement=True,
+        intra_op_parallelism_threads=12,
+        inter_op_parallelism_threads=12)
+    sess = tf.Session(config=config)
+    with LocalRunner(sess=sess, max_cpus=12) as runner:
         env = TfEnv(normalize(env))
 
         policy = GaussianMLPPolicyWithModel(
@@ -208,10 +232,11 @@ def run_garage_with_models(env, seed, log_dir):
             output_nonlinearity=None,
         )
 
-        baseline = ContinuousMLPBaselineWithModel(
+        baseline = GaussianMLPBaseline(
             env_spec=env.spec,
             regressor_args=dict(
                 hidden_sizes=(64, 64),
+                use_trust_region=False,
                 optimizer=FirstOrderOptimizer,
                 optimizer_args=dict(
                     batch_size=32,
@@ -219,7 +244,7 @@ def run_garage_with_models(env, seed, log_dir):
                     tf_optimizer_args=dict(learning_rate=1e-3),
                 ),
             ),
-            name='GaussianMLPBaselineWithModelBenchmark')
+            name='GaussianMLPBaselineBenchmark')
 
         algo = PPO(
             env_spec=env.spec,
@@ -243,9 +268,13 @@ def run_garage_with_models(env, seed, log_dir):
         dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
         dowel_logger.add_output(dowel.TensorBoardOutput(log_dir))
 
-        runner.setup(algo, env)
-        runner.train(n_epochs=488, batch_size=2048)
-
+        runner.setup(algo, env, sampler_args=dict(n_envs=12))
+        r2 = policy.get_trainable_vars()
+        # Load weights that was saved from GaussianMLPPolicy
+        for i in range(len(r2)):
+            r2[i].load(var1[i])
+        runner.train(n_epochs=3, batch_size=2048)
+        var2.append([i.eval() for i in r2])
         dowel_logger.remove_all()
 
         return tabular_log_file
