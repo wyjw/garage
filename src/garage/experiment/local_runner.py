@@ -1,69 +1,24 @@
-"""
-The local runner for tensorflow algorithms.
-
-A runner setup context for algorithms during initialization and
-pipelines data between sampler and algorithm during training.
-"""
 import copy
 import time
 import types
 
 from dowel import logger, tabular
-import tensorflow as tf
 
 from garage.experiment.snapshotter import Snapshotter
 
-# Note: Optional module should be imported ad hoc to break circular dependency.
-
 
 class LocalRunner:
-    """This class implements a local runner for tensorflow algorithms.
-
-    A local runner provides a default tensorflow session using python context.
-    This is useful for those experiment components (e.g. policy) that require a
-    tensorflow session during construction.
-
-    Use Runner.setup(algo, env) to setup algorithm and environement for runner
-    and Runner.train() to start training.
+    """Base class of local runner.
 
     Args:
         snapshot_config (garage.experiment.SnapshotConfig): The snapshot
             configuration used by LocalRunner to create the snapshotter.
             If None, it will create one with default settings.
         max_cpus (int): The maximum number of parallel sampler workers.
-        sess (tf.Session): An optional tensorflow session.
-              A new session will be created immediately if not provided.
-
-    Note:
-        The local runner will set up a joblib task pool of size max_cpus
-        possibly later used by BatchSampler. If BatchSampler is not used,
-        the processes in the pool will remain dormant.
-
-        This setup is required to use tensorflow in a multiprocess
-        environment before a tensorflow session is created
-        because tensorflow is not fork-safe.
-
-        See https://github.com/tensorflow/tensorflow/issues/2448.
-
-    Examples:
-        with LocalRunner() as runner:
-            env = gym.make('CartPole-v1')
-            policy = CategoricalMLPPolicy(
-                env_spec=env.spec,
-                hidden_sizes=(32, 32))
-            algo = TRPO(
-                env=env,
-                policy=policy,
-                baseline=baseline,
-                max_path_length=100,
-                discount=0.99,
-                max_kl_step=0.01)
-            runner.setup(algo, env)
-            runner.train(n_epochs=100, batch_size=4000)
 
     """
 
-    def __init__(self, snapshot_config=None, sess=None, max_cpus=1):
+    def __init__(self, snapshot_config=None, max_cpus=1):
         if snapshot_config:
             self._snapshotter = Snapshotter(snapshot_config.snapshot_dir,
                                             snapshot_config.snapshot_mode,
@@ -74,41 +29,16 @@ class LocalRunner:
         if max_cpus > 1:
             from garage.sampler import singleton_pool
             singleton_pool.initialize(max_cpus)
-        self.sess = sess or tf.Session()
-        self.sess_entered = False
         self.has_setup = False
         self.plot = False
 
         self._setup_args = None
         self.train_args = None
 
-    def __enter__(self):
-        """Set self.sess as the default session.
-
-        Returns:
-            This local runner.
-
-        """
-        if tf.get_default_session() is not self.sess:
-            self.sess.__enter__()
-            self.sess_entered = True
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Leave session."""
-        if tf.get_default_session() is self.sess and self.sess_entered:
-            self.sess.__exit__(exc_type, exc_val, exc_tb)
-            self.sess_entered = False
-
     def setup(self, algo, env, sampler_cls=None, sampler_args=None):
         """Set up runner for algorithm and environment.
 
         This method saves algo and env within runner and creates a sampler.
-
-        Note:
-            After setup() is called all variables in session should have been
-            initialized. setup() respects existing values in session so
-            policy weights can be loaded before setup().
 
         Args:
             algo (garage.np.algos.RLAlgorithm): An algorithm instance.
@@ -139,25 +69,10 @@ class LocalRunner:
 
         self.sampler = sampler_cls(algo, env, **sampler_args)
 
-        self.initialize_tf_vars()
-        logger.log(self.sess.graph)
         self.has_setup = True
 
         self._setup_args = types.SimpleNamespace(
             sampler_cls=sampler_cls, sampler_args=sampler_args)
-
-    def initialize_tf_vars(self):
-        """Initialize all uninitialized variables in session."""
-        with tf.name_scope('initialize_tf_vars'):
-            uninited_set = [
-                e.decode()
-                for e in self.sess.run(tf.report_uninitialized_variables())
-            ]
-            self.sess.run(
-                tf.variables_initializer([
-                    v for v in tf.global_variables()
-                    if v.name.split(':')[0] in uninited_set
-                ]))
 
     def _start_worker(self):
         """Start Plotter and Sampler workers."""
@@ -230,24 +145,6 @@ class LocalRunner:
 
         Returns:
             A SimpleNamespace for train()'s arguments.
-
-        Examples:
-            1. Resume experiment immediately.
-            with LocalRunner() as runner:
-                runner.restore(resume_from_dir)
-                runner.resume()
-
-            2. Resume experiment with modified training arguments.
-             with LocalRunner() as runner:
-                runner.restore(resume_from_dir)
-                runner.resume(n_epochs=20)
-
-        Note:
-            When resume via command line, new snapshots will be
-            saved into the SAME directory if not specified.
-
-            When resume programmatically, snapshot directory should be
-            specify manually or through run_experiment() interface.
 
         """
         saved = self._snapshotter.load(from_dir, from_epoch)
@@ -397,8 +294,8 @@ class LocalRunner:
             The average return in last epoch cycle.
 
         """
-        assert self.train_args is not None, (
-            'You must call restore() before resume().')
+        if self.train_args is None:
+            raise Exception('You must call restore() before resume().')
 
         self.train_args.n_epochs = n_epochs or self.train_args.n_epochs
         self.train_args.batch_size = batch_size or self.train_args.batch_size
