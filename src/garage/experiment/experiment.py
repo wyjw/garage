@@ -62,7 +62,6 @@ class VariantGenerator:
     vg.add("param2", lambda param1: [param1+1, param1+2])
     vg.variants() => # ..
     """
-
     def __init__(self):
         self._variants = []
         self._populate_variants()
@@ -258,15 +257,14 @@ def run_experiment(method_call=None,
 
     if batch_tasks is None:
         batch_tasks = [
-            dict(
-                kwargs,
-                pre_commands=pre_commands,
-                method_call=method_call,
-                exp_name=exp_name,
-                log_dir=log_dir,
-                env=env,
-                variant=variant,
-                use_cloudpickle=use_cloudpickle)
+            dict(kwargs,
+                 pre_commands=pre_commands,
+                 method_call=method_call,
+                 exp_name=exp_name,
+                 log_dir=log_dir,
+                 env=env,
+                 variant=variant,
+                 use_cloudpickle=use_cloudpickle)
         ]
 
     global exp_count
@@ -312,8 +310,9 @@ def run_experiment(method_call=None,
 
     for task in batch_tasks:
         env = task.pop('env', None)
-        command = to_local_command(
-            task, python_command=python_command, script=script)
+        command = to_local_command(task,
+                                   python_command=python_command,
+                                   script=script)
         print(command)
         if dry:
             return
