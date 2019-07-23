@@ -150,8 +150,13 @@ def run_garage(env, seed, log_dir):
     :return:
     '''
     deterministic.set_seed(seed)
+    config = tf.ConfigProto(
+        allow_soft_placement=True,
+        intra_op_parallelism_threads=12,
+        inter_op_parallelism_threads=12)
+    sess = tf.Session(config=config)
 
-    with LocalRunner() as runner:
+    with LocalRunner(sess=sess, max_cpus=12) as runner:
         env = TfEnv(normalize(env))
         # Set up params for ddpg
         action_noise = OUStrategy(env.spec, sigma=params['sigma'])
@@ -194,7 +199,7 @@ def run_garage(env, seed, log_dir):
         dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
         dowel_logger.add_output(dowel.TensorBoardOutput(tensorboard_log_dir))
 
-        runner.setup(ddpg, env)
+        runner.setup(ddpg, env, sampler_args=dict(n_envs=12))
         runner.train(
             n_epochs=params['n_epochs'],
             n_epoch_cycles=params['n_epoch_cycles'],
@@ -217,8 +222,13 @@ def run_garage_model(env, seed, log_dir):
     :return:
     '''
     deterministic.set_seed(seed)
+    config = tf.ConfigProto(
+        allow_soft_placement=True,
+        intra_op_parallelism_threads=12,
+        inter_op_parallelism_threads=12)
+    sess = tf.Session(config=config)
 
-    with LocalRunner() as runner:
+    with LocalRunner(sess=sess, max_cpus=12) as runner:
         env = TfEnv(env)
         # Set up params for ddpg
         action_noise = OUStrategy(env.spec, sigma=params['sigma'])
@@ -263,7 +273,7 @@ def run_garage_model(env, seed, log_dir):
         dowel_logger.add_output(dowel.CsvOutput(tabular_log_file))
         dowel_logger.add_output(dowel.TensorBoardOutput(tensorboard_log_dir))
 
-        runner.setup(ddpg, env)
+        runner.setup(ddpg, env, sampler_args=dict(n_envs=12))
         runner.train(
             n_epochs=params['n_epochs'],
             n_epoch_cycles=params['n_epoch_cycles'],
